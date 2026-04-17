@@ -30,6 +30,9 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
   String? selectedFolder;
   String status = "Gotowy";
   bool isLoading = false;
+  double progress = 0;
+
+  List<Map<String, String>> history = []; // do cofania
 
   Future<void> pickFolder() async {
     String? path = await FilePicker.platform.getDirectoryPath();
@@ -47,8 +50,14 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
     int counter = 1;
 
     while (File(newPath).existsSync()) {
-      String name = fileName.split('.').first;
-      String ext = fileName.contains('.') ? ".${fileName.split('.').last}" : "";
+      String name = fileName.contains('.')
+          ? fileName.substring(0, fileName.lastIndexOf('.'))
+          : fileName;
+
+      String ext = fileName.contains('.')
+          ? fileName.substring(fileName.lastIndexOf('.'))
+          : "";
+
       newPath = "$dirPath/${name}_$counter$ext";
       counter++;
     }
@@ -56,68 +65,90 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
     return newPath;
   }
 
+  Map<String, List<String>> categories = {
+    "Obrazy": ["jpg", "png", "jpeg", "gif", "webp"],
+    "Dokumenty": ["pdf", "doc", "docx", "txt", "xls", "xlsx"],
+    "Instalatory": ["exe", "msi", "apk"],
+    "Wideo": ["mp4", "mkv", "avi", "mov"],
+    "Archiwa": ["zip", "rar", "7z"],
+  };
+
+  String getCategory(String ext) {
+    for (var entry in categories.entries) {
+      if (entry.value.contains(ext)) return entry.key;
+    }
+    return "Inne";
+  }
+
   Future<void> organizeFiles() async {
     if (selectedFolder == null) return;
-
-    setState(() {
-      isLoading = true;
-      status = "Przetwarzanie...";
-    });
 
     Directory dir = Directory(selectedFolder!);
     List<FileSystemEntity> files = dir.listSync();
 
-    Directory images = Directory("${selectedFolder!}/Obrazy");
-    Directory docs = Directory("${selectedFolder!}/Dokumenty");
-    Directory installers = Directory("${selectedFolder!}/Instalatory");
-    Directory others = Directory("${selectedFolder!}/Inne");
+    setState(() {
+      isLoading = true;
+      progress = 0;
+      status = "Przetwarzanie...";
+      history.clear();
+    });
 
-    if (!images.existsSync()) images.createSync();
-    if (!docs.existsSync()) docs.createSync();
-    if (!installers.existsSync()) installers.createSync();
-    if (!others.existsSync()) others.createSync();
-
+    int totalFiles = files.whereType<File>().length;
+    int processed = 0;
     int moved = 0;
 
     for (var file in files) {
       if (file is File) {
         String fileName = file.uri.pathSegments.last;
 
-        // ignoruj pliki już w folderach docelowych
         if (file.path.contains("/Obrazy") ||
             file.path.contains("/Dokumenty") ||
             file.path.contains("/Instalatory") ||
-            file.path.contains("/Inne")) continue;
+            file.path.contains("/Inne") ||
+            file.path.contains("/Wideo") ||
+            file.path.contains("/Archiwa")) continue;
 
         String ext = fileName.contains('.')
             ? fileName.split('.').last.toLowerCase()
             : "";
 
-        Directory targetDir;
+        String category = getCategory(ext);
+        Directory targetDir =
+            Directory("${selectedFolder!}/$category");
 
-        if (["jpg", "png", "jpeg", "gif", "webp"].contains(ext)) {
-          targetDir = images;
-        } else if (["pdf", "doc", "docx", "txt", "xls", "xlsx"].contains(ext)) {
-          targetDir = docs;
-        } else if (["exe", "msi", "apk"].contains(ext)) {
-          targetDir = installers;
-        } else {
-          targetDir = others;
+        if (!targetDir.existsSync()) {
+          targetDir.createSync();
         }
 
         try {
           String newPath = getUniquePath(targetDir.path, fileName);
-          file.renameSync(newPath);
+          await file.rename(newPath);
+
+          history.add({
+            "from": newPath,
+            "to": file.path,
+          });
+
           moved++;
         } catch (e) {
-          // fallback: kopiuj + usuń
           try {
             String newPath = getUniquePath(targetDir.path, fileName);
             await file.copy(newPath);
             await file.delete();
+
+            history.add({
+              "from": newPath,
+              "to": file.path,
+            });
+
             moved++;
           } catch (_) {}
         }
+
+        processed++;
+        setState(() {
+          progress = processed / totalFiles;
+        });
       }
     }
 
@@ -141,6 +172,27 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
     );
   }
 
+  Future<void> undoChanges() async {
+    if (history.isEmpty) return;
+
+    setState(() {
+      isLoading = true;
+      status = "Cofanie zmian...";
+    });
+
+    for (var item in history.reversed) {
+      try {
+        await File(item["from"]!).rename(item["to"]!);
+      } catch (_) {}
+    }
+
+    setState(() {
+      isLoading = false;
+      status = "Cofnięto zmiany";
+      history.clear();
+    });
+  }
+
   Widget buildCard() {
     return Card(
       elevation: 6,
@@ -154,26 +206,26 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
             Text(
               selectedFolder ?? "Nie wybrano folderu",
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[700]),
             ),
             SizedBox(height: 20),
             ElevatedButton.icon(
               onPressed: isLoading ? null : pickFolder,
               icon: Icon(Icons.folder_open),
               label: Text("Wybierz folder"),
-              style: ElevatedButton.styleFrom(
-                minimumSize: Size(double.infinity, 50),
-              ),
             ),
             SizedBox(height: 10),
             ElevatedButton.icon(
               onPressed: isLoading ? null : organizeFiles,
               icon: Icon(Icons.cleaning_services),
               label: Text("Segreguj pliki"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                minimumSize: Size(double.infinity, 50),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            ),
+            SizedBox(height: 10),
+            ElevatedButton.icon(
+              onPressed: isLoading ? null : undoChanges,
+              icon: Icon(Icons.undo),
+              label: Text("Cofnij"),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
             ),
           ],
         ),
@@ -185,11 +237,18 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
     return Column(
       children: [
         SizedBox(height: 20),
-        if (isLoading) CircularProgressIndicator(),
+        if (isLoading)
+          Column(
+            children: [
+              CircularProgressIndicator(value: progress),
+              SizedBox(height: 10),
+              Text("${(progress * 100).toStringAsFixed(0)}%"),
+            ],
+          ),
         SizedBox(height: 10),
         Text(
           "Status: $status",
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+          style: TextStyle(fontSize: 16),
         ),
       ],
     );
@@ -197,28 +256,20 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
 
   Widget buildInfo() {
     return Column(
-      children: [
-        ListTile(
-          leading: Icon(Icons.image, color: Colors.blue),
-          title: Text("Obrazy"),
-          subtitle: Text("jpg, png, jpeg, gif"),
+      children: categories.keys.map((cat) {
+        return ListTile(
+          leading: Icon(Icons.folder),
+          title: Text(cat),
+          subtitle: Text(categories[cat]!.join(", ")),
+        );
+      }).toList()
+        ..add(
+          ListTile(
+            leading: Icon(Icons.folder),
+            title: Text("Inne"),
+            subtitle: Text("pozostałe pliki"),
+          ),
         ),
-        ListTile(
-          leading: Icon(Icons.description, color: Colors.orange),
-          title: Text("Dokumenty"),
-          subtitle: Text("pdf, doc, txt, xls"),
-        ),
-        ListTile(
-          leading: Icon(Icons.settings, color: Colors.red),
-          title: Text("Instalatory"),
-          subtitle: Text("exe, msi, apk"),
-        ),
-        ListTile(
-          leading: Icon(Icons.folder, color: Colors.grey),
-          title: Text("Inne"),
-          subtitle: Text("pozostałe pliki"),
-        ),
-      ],
     );
   }
 
@@ -229,7 +280,7 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
         title: Text("Download Cleaner"),
         centerTitle: true,
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
