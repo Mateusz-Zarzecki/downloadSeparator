@@ -26,6 +26,7 @@ class FileOrganizerPage extends StatefulWidget {
   _FileOrganizerPageState createState() => _FileOrganizerPageState();
 }
 
+
 class _FileOrganizerPageState extends State<FileOrganizerPage> {
   String? selectedFolder;
   String status = "Gotowy";
@@ -173,25 +174,49 @@ class _FileOrganizerPageState extends State<FileOrganizerPage> {
   }
 
   Future<void> undoChanges() async {
-    if (history.isEmpty) return;
+  if (history.isEmpty) return;
 
-    setState(() {
-      isLoading = true;
-      status = "Cofanie zmian...";
-    });
+  setState(() {
+    isLoading = true;
+    status = "Cofanie zmian...";
+  });
 
-    for (var item in history.reversed) {
-      try {
-        await File(item["from"]!).rename(item["to"]!);
-      } catch (_) {}
-    }
-
-    setState(() {
-      isLoading = false;
-      status = "Cofnięto zmiany";
-      history.clear();
-    });
+  for (var item in history.reversed) {
+    try {
+      await File(item["from"]!).rename(item["to"]!);
+    } catch (_) {}
   }
+
+  removeEmptyCategoryFolders();
+
+  setState(() {
+    isLoading = false;
+    status = "Cofnięto zmiany";
+    history.clear();
+  });
+}
+
+void removeEmptyCategoryFolders() {
+  if (selectedFolder == null) return;
+
+  for (var category in categories.keys) {
+    Directory dir = Directory("${selectedFolder!}/$category");
+
+    if (dir.existsSync()) {
+      final items = dir.listSync();
+
+      if (items.isEmpty) {
+        dir.deleteSync();
+      }
+    }
+  }
+
+  Directory otherDir = Directory("${selectedFolder!}/Inne");
+
+  if (otherDir.existsSync() && otherDir.listSync().isEmpty) {
+    otherDir.deleteSync();
+  }
+}
 
   Widget buildCard() {
     return Card(
